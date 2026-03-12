@@ -1,0 +1,92 @@
+PROJECT WORKING DOCUMENTATION
+=============================
+
+1. DATA SOURCE & COLLECTION
+---------------------------
+We are working with a hybrid dataset that combines historical incident reports with simulated meteorological data.
+
+- **Primary Data:** Historical waterlogging incident reports (location, date, severity).
+- **Weather Data:** Since historical granular weather data is hard to obtain, we simulate realistic weather conditions (rainfall, temperature, humidity, pressure) based on the incident's severity and season (Monsoon vs Non-Monsoon).
+- **Simulation Logic:** 
+  - High severity incidents are assigned heavy rainfall (15-50mm).
+  - Monsoon months (June-Sept) get higher rainfall multipliers.
+  - Non-waterlogged records are generated with low/no rainfall to provide negative samples.
+- **Storage:** Data is stored in `data/raw/incidents/waterlogging_incidents.csv`.
+
+2. FEATURE ENGINEERING
+----------------------
+We extract a rich set of features to capture the environmental and geospatial context of each data point.
+
+**Processing Steps:**
+- **Temporal Features:** 
+  - `is_monsoon`: Binary flag for June-September.
+  - `month_sin`/`month_cos`: Cyclical encoding of months to preserve seasonal continuity.
+- **Rainfall Features:**
+  - `rainfall_current`: Immediate rainfall in mm.
+  - `rainfall_cumulative_24h` & `48h`: Estimated cumulative load (critical for saturation).
+  - `rainfall_intensity_num`: Categorical intensity (1=Light to 4=Extreme).
+- **Geospatial Features:**
+  - `elevation`: Approximate elevation derived from latitude (lower latitude = higher elevation proxy in this specific synthetic context).
+  - `distance_to_known_location`: Distance to nearest known waterlogging hotspot (e.g., Minto Bridge).
+  - `is_low_lying`: Binary flag for areas below a certain elevation threshold.
+- **Interaction Features:**
+  - `rainfall_location_risk`: Interaction term (`rainfall / distance`) to highlight heavy rain near vulnerable spots.
+
+**Preprocessing:**
+- All features are scaled using `StandardScaler` to normalize their range (mean=0, variance=1) before feeding into the models.
+
+3. MODEL ARCHITECTURE
+---------------------
+We use a **Hybrid Ensemble Approach** combining two powerful tree-based algorithms.
+
+**Models Chosen:**
+1.  **Random Forest Classifier:**
+    -   *Why:* Robust against overfitting, handles non-linear relationships well, and provides good baseline performance.
+2.  **Gradient Boosting Classifier:**
+    -   *Why:* Focuses on correcting the errors of previous trees, often yielding higher accuracy on complex tabular data.
+
+**Why this combination?**
+- Random Forest reduces variance (overfitting).
+- Gradient Boosting reduces bias (underfitting).
+- Combining them gives a more stable and accurate predictor than either alone.
+
+4. MODEL INTEGRATION
+--------------------
+The two models are integrated using a **Soft Voting Ensemble**.
+
+- **Mechanism:** `VotingClassifier` from Scikit-Learn.
+- **Method:** `voting='soft'`
+- **Logic:** The ensemble calculates the average predicted probability from both models.
+  - `Final_Prob = (Prob_RandomForest + Prob_GradientBoosting) / 2`
+- **Benefit:** This smooths out individual model quirks and provides a more reliable probability estimate.
+
+5. API & DYNAMIC DATA HANDLING
+------------------------------
+The system is designed to operate in real-time using live data.
+
+**API Usage:**
+- **Provider:** OpenWeatherMap API.
+- **Key Storage:** Securely stored in `config/config.yaml`.
+- **Endpoint:** `https://api.openweathermap.org/data/2.5/weather`
+
+**Real-time Workflow:**
+1.  **Input:** User provides a location (Latitude/Longitude).
+2.  **Fetch:** System calls the API to get current `rain_1h`, `temp`, `humidity`, etc.
+3.  **Feature Construction:** The system dynamically constructs the feature vector (calculating distances, seasonality, etc.) on-the-fly, matching the training data structure.
+4.  **Prediction:** The pre-trained ensemble model predicts the probability.
+5.  **Physical Constraint (Post-Processing):** 
+    - We apply a logic check: If `current_rainfall == 0`, the model's raw probability is multiplied by 0.1 (drastically reduced).
+    - This ensures we don't predict "High Risk" on a sunny, dry day, correcting potential model hallucinations.
+
+6. RESULTS & OUTPUT
+-------------------
+The system outputs a structured prediction object:
+
+- **Probability:** A score from 0.0 to 1.0 indicating likelihood of waterlogging.
+- **Risk Level:** Categorical classification based on thresholds:
+  - **HIGH:** Probability > 0.7
+  - **MEDIUM:** Probability > 0.4
+  - **LOW:** Probability <= 0.4
+- **Prediction:** Binary outcome (0 or 1).
+
+This output is then visualized on the map with color-coded markers (Red/Orange/Green).

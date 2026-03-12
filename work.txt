@@ -1,0 +1,89 @@
+# Waterlogging Prediction Model: End-to-End Workflow
+
+This document explains exactly how your machine learning pipeline works, from the moment data is created to the final prediction.
+
+---
+
+## 1. The Raw Data (The Foundation)
+**Source:** `data/generate_training_data.py` & `data/collect_enhanced_data.py`
+
+The model doesn't just guess; it learns from history. We start by creating a dataset that mimics reality.
+
+**How it works:**
+1.  **Historical Events:** We take real dates of heavy rain in Delhi (e.g., "2023-07-09", 153mm rain).
+2.  **Simulation:** Since we don't have sensors everywhere, we simulate the conditions.
+    *   If it rained 153mm, the **Temperature** drops (e.g., to 26°C) and **Humidity** rises (e.g., to 90%).
+    *   We add "noise" (random variations) so the model doesn't memorize just one specific number.
+
+**Example Raw Row:**
+| Date | Location | Rainfall (mm) | Temp (°C) | Humidity (%) | Severity Zone | Waterlogged? |
+|------------|--------------|---------------|-----------|--------------|---------------|--------------|
+| 2023-07-09 | Minto Bridge | 153.0 | 26.5 | 92 | 5 (High) | **1 (Yes)** |
+
+---
+
+## 2. Feature Engineering (Making Data Usable)
+**Source:** `data/feature_engineering.py`
+
+Raw numbers aren't enough. We need to give the model "hints" or context. This is called Feature Engineering.
+
+**Key Transformations:**
+1.  **Temporal Features:**
+    *   The model doesn't understand "July". We convert it to math using Sine/Cosine waves (`month_sin`, `month_cos`) so it understands that December (12) is close to January (1).
+    *   `is_monsoon`: A simple flag (1 or 0) if the month is June-September.
+2.  **Cumulative Rainfall:**
+    *   Waterlogging often happens because it rained *yesterday* too, saturating the ground.
+    *   We create `rainfall_cumulative_24h` and `rainfall_cumulative_48h`.
+3.  **Spatial Risk:**
+    *   `distance_to_known_location`: How close is this point to a known hotspot (like Minto Bridge)?
+    *   `elevation_relative`: Is this point lower than its surroundings?
+
+**Example Transformed Input:**
+*   **Raw:** July 9th, 153mm rain.
+*   **Features:** `[month_sin: -0.5, is_monsoon: 1, rainfall_current: 153.0, rainfall_48h: 300.0, near_hotspot: 1]`
+
+---
+
+## 3. The Hybrid Model (The Brain)
+**Source:** `models/model_trainer.py`
+
+We don't trust just one expert. We hire two different "experts" (models) and average their opinions.
+
+### Expert A: Random Forest (The "Council")
+*   **How it works:** It builds 200 different decision trees.
+*   **The Logic:** Each tree asks a series of Yes/No questions.
+    *   *Tree 1:* "Is rain > 50mm?" -> Yes. "Is it Minto Bridge?" -> Yes. => **Waterlog**.
+    *   *Tree 2:* "Is humidity > 80%?" -> Yes. "Is it Monsoon?" -> Yes. => **Waterlog**.
+*   **Final Vote:** If 160 trees say "Waterlog" and 40 say "Safe", the confidence is **80%**.
+
+### Expert B: Gradient Boosting (The "Improver")
+*   **How it works:** It builds trees one by one.
+*   **The Logic:**
+    *   *Tree 1* makes a guess. It makes some mistakes.
+    *   *Tree 2* focuses *only* on fixing the mistakes of Tree 1.
+    *   *Tree 3* fixes the mistakes of Tree 2.
+*   **Result:** It becomes extremely accurate at handling tricky edge cases.
+
+### The Ensemble (Soft Voting)
+We combine them to get the final answer.
+
+**Scenario:** Heavy rain (60mm) in a medium-risk area.
+1.  **Random Forest** says: "I've seen this before, it usually floods." -> **Confidence: 0.80 (80%)**
+2.  **Gradient Boosting** says: "Wait, the drainage here was improved recently, I'm less sure." -> **Confidence: 0.60 (60%)**
+
+**The Math:**
+$$ \text{Final Score} = \frac{0.80 + 0.60}{2} = \mathbf{0.70} $$
+
+---
+
+## 4. The Final Decision
+**Source:** `prediction/real_time_predictor.py`
+
+The model outputs a probability (0.70). We convert this into a human-readable risk level.
+
+*   **If Probability > 0.7:** **HIGH RISK** (Red Alert)
+*   **If Probability > 0.4:** **MEDIUM RISK** (Orange Alert)
+*   **Else:** **LOW RISK** (Green)
+
+**Result for our example:**
+The system displays a **RED ALERT** for Minto Bridge with **70% Probability**.
